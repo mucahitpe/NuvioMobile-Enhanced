@@ -18,10 +18,12 @@ enum MPVSubtitleFontResolver {
     // MARK: Scripts
 
     enum Script: String, CaseIterable {
-        case han, japanese, korean, thai, arabic, hebrew, devanagari
+        case latinExtended, han, japanese, korean, thai, arabic, hebrew, devanagari
 
         var systemFamilies: [String] {
             switch self {
+            case .latinExtended:
+                return ["Noto Sans"]
             case .han:
                 return ["PingFang SC", "PingFang TC", "Hiragino Sans"]
             case .japanese:
@@ -42,13 +44,15 @@ enum MPVSubtitleFontResolver {
         var bundledFamilies: [String] { MPVSubtitleFontResolver.registeredFamilies }
 
         var candidateFamilies: [String] {
-            self == .han
+            self == .han || self == .latinExtended
                 ? bundledFamilies + systemFamilies
                 : systemFamilies + bundledFamilies
         }
 
         var probeScalars: [UnicodeScalar] {
             switch self {
+            case .latinExtended:
+                return ["\u{011E}", "\u{011F}", "\u{0130}", "\u{0131}", "\u{015E}", "\u{015F}"]
             case .han:        return ["\u{4E2D}", "\u{4EEC}", "\u{8FD9}"]
             case .japanese:   return ["\u{3042}", "\u{6F22}"]
             case .korean:     return ["\u{AC00}"]
@@ -133,6 +137,7 @@ enum MPVSubtitleFontResolver {
 
         let normalized = tag.lowercased().replacingOccurrences(of: "_", with: "-")
         switch normalized.split(separator: "-").first.map(String.init) ?? normalized {
+        case "tr", "tur", "az", "aze", "crh", "tt", "kaz", "kk", "zza", "lzz": return .latinExtended
         case "zh", "zho", "chi", "cmn", "yue", "nan", "hak": return .han
         case "ja", "jpn", "jp":                              return .japanese
         case "ko", "kor":                                    return .korean
@@ -155,6 +160,9 @@ enum MPVSubtitleFontResolver {
 
     private static func script(forScalar scalar: UnicodeScalar) -> Script? {
         switch scalar.value {
+        case 0x0041...0x005A, 0x0061...0x007A,
+             0x00C0...0x024F, 0x1E00...0x1EFF,
+             0x2C60...0x2C7F, 0xA720...0xA7FF:                    return .latinExtended
         case 0x3040...0x30FF, 0x31F0...0x31FF:                       return .japanese
         case 0x3400...0x4DBF, 0x4E00...0x9FFF,
              0xF900...0xFAFF, 0x20000...0x2FA1F:                     return .han
@@ -256,13 +264,15 @@ final class MPVSubtitleFontController {
         // but also replaced mpv's system fallback for every Latin subtitle.
         // A CJK-capable family is selected after the active track/text identifies
         // a supported non-Latin script.
-        appliedFamily = MPVSubtitleFontResolver.defaultFamily
+        // Wait for the first subtitle cue to identify its script. Until then,
+        // leave mpv on its normal system fallback path.
+        appliedFamily = nil
     }
 
     func reapplyFont() {
         player?.setStringProperty(
             "sub-font",
-            appliedFamily ?? MPVSubtitleFontResolver.defaultFamily
+            appliedFamily ?? "sans-serif"
         )
     }
 
@@ -310,7 +320,7 @@ final class MPVSubtitleFontController {
     private func applyResolvedFont() {
         let script = scriptFromText ?? scriptFromLanguage
         let family = script.flatMap { MPVSubtitleFontResolver.family(for: $0) }
-            ?? MPVSubtitleFontResolver.defaultFamily
+            ?? "sans-serif"
 
         guard family != appliedFamily else { return }
 
