@@ -160,8 +160,7 @@ enum MPVSubtitleFontResolver {
 
     private static func script(forScalar scalar: UnicodeScalar) -> Script? {
         switch scalar.value {
-        case 0x0041...0x005A, 0x0061...0x007A,
-             0x00C0...0x024F, 0x1E00...0x1EFF,
+        case 0x00C0...0x024F, 0x1E00...0x1EFF,
              0x2C60...0x2C7F, 0xA720...0xA7FF:                    return .latinExtended
         case 0x3040...0x30FF, 0x31F0...0x31FF:                       return .japanese
         case 0x3400...0x4DBF, 0x4E00...0x9FFF,
@@ -249,7 +248,7 @@ final class MPVSubtitleFontController {
         self.player = player
     }
 
-    func applySetupOptions() {
+    func applySetupOptions(_ setOption: (String, String) -> Void) {
         for line in MPVSubtitleFontResolver.registerBundledFonts() {
             InAppLogBridge.shared.info(tag: "MPV/SubFont", message: line)
         }
@@ -260,20 +259,27 @@ final class MPVSubtitleFontController {
             }
         }
 
-        // Do not apply the bundled CJK font globally. It fixed Chinese glyphs,
-        // but also replaced mpv's system fallback for every Latin subtitle.
-        // A CJK-capable family is selected after the active track/text identifies
-        // a supported non-Latin script.
-        // Wait for the first subtitle cue to identify its script. Until then,
-        // leave mpv on its normal system fallback path.
-        appliedFamily = nil
+        guard let family = MPVSubtitleFontResolver.baselineFamily else {
+            InAppLogBridge.shared.warn(
+                tag: "MPV/SubFont",
+                message: "No CJK-capable font available; non-Latin subtitles may render as boxes"
+            )
+            return
+        }
+
+        // Preserve Enhanced's original baseline: the bundled CJK font is
+        // selected once at startup. Latin Extended text can opt into the
+        // bundled Latin face later, while other scripts continue to use
+        // mpv/iOS fallback unless the existing script resolver selects a
+        // dedicated family.
+        setOption("sub-font", family)
+        appliedFamily = family
+        InAppLogBridge.shared.info(tag: "MPV/SubFont", message: "baseline font: \(family)")
     }
 
     func reapplyFont() {
-        player?.setStringProperty(
-            "sub-font",
-            appliedFamily ?? "sans-serif"
-        )
+        guard let family = appliedFamily else { return }
+        player?.setStringProperty("sub-font", family)
     }
 
     func handlePropertyChange(_ eventPtr: UnsafeMutablePointer<mpv_event>) {
@@ -310,8 +316,9 @@ final class MPVSubtitleFontController {
     }
 
     private func handleText(_ text: String?) {
-        let script = text.flatMap(MPVSubtitleFontResolver.script(forText:))
-        guard script != scriptFromText else { return }
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let script = MPVSubtitleFontResolver.script(forText: text),
+              script != scriptFromText else { return }
 
         scriptFromText = script
         applyResolvedFont()
@@ -320,9 +327,9 @@ final class MPVSubtitleFontController {
     private func applyResolvedFont() {
         let script = scriptFromText ?? scriptFromLanguage
         let family = script.flatMap { MPVSubtitleFontResolver.family(for: $0) }
-            ?? "sans-serif"
+            ?? MPVSubtitleFontResolver.baselineFamily
 
-        guard family != appliedFamily else { return }
+        guard let family, family != appliedFamily else { return }
 
         appliedFamily = family
         player?.setStringProperty("sub-font", family)
