@@ -306,7 +306,7 @@ final class MPVSubtitleFontController {
         let family = script.flatMap { MPVSubtitleFontResolver.family(for: $0) }
             ?? MPVSubtitleFontResolver.defaultFamily
 
-        guard let family, family != appliedFamily else { return }
+        guard family != appliedFamily else { return }
 
         appliedFamily = family
         player?.setStringProperty("sub-font", family)
