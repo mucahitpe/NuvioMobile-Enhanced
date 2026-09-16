@@ -60,6 +60,9 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Ensure runtime properties file
+        run: touch local.properties
+
       - name: Configure runtime properties
         if: env.RELEASE_PROPERTIES_BASE64 != ''
         run: |
