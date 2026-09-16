@@ -108,7 +108,9 @@ enum MPVSubtitleFontResolver {
 
     // MARK: Resolution
 
-    static var baselineFamily: String? { family(for: .han) }
+    /// mpv's built-in default. Keep Latin-script subtitles on the native CoreText
+    /// fallback path; the bundled CJK face is selected only when it is needed.
+    static let defaultFamily = "sans-serif"
 
     static func family(for script: Script) -> String? {
         cacheLock.lock()
@@ -233,7 +235,7 @@ final class MPVSubtitleFontController {
         self.player = player
     }
 
-    func applySetupOptions(_ setOption: (String, String) -> Void) {
+    func applySetupOptions() {
         for line in MPVSubtitleFontResolver.registerBundledFonts() {
             InAppLogBridge.shared.info(tag: "MPV/SubFont", message: line)
         }
@@ -244,22 +246,18 @@ final class MPVSubtitleFontController {
             }
         }
 
-        guard let family = MPVSubtitleFontResolver.baselineFamily else {
-            InAppLogBridge.shared.warn(
-                tag: "MPV/SubFont",
-                message: "No CJK-capable font available; non-Latin subtitles may render as boxes"
-            )
-            return
-        }
-
-        setOption("sub-font", family)
-        appliedFamily = family
-        InAppLogBridge.shared.info(tag: "MPV/SubFont", message: "baseline font: \(family)")
+        // Do not apply the bundled CJK font globally. It fixed Chinese glyphs,
+        // but also replaced mpv's system fallback for every Latin subtitle.
+        // A CJK-capable family is selected after the active track/text identifies
+        // a supported non-Latin script.
+        appliedFamily = MPVSubtitleFontResolver.defaultFamily
     }
 
     func reapplyFont() {
-        guard let family = appliedFamily else { return }
-        player?.setStringProperty("sub-font", family)
+        player?.setStringProperty(
+            "sub-font",
+            appliedFamily ?? MPVSubtitleFontResolver.defaultFamily
+        )
     }
 
     func handlePropertyChange(_ eventPtr: UnsafeMutablePointer<mpv_event>) {
@@ -296,10 +294,8 @@ final class MPVSubtitleFontController {
     }
 
     private func handleText(_ text: String?) {
-        guard let text, !text.isEmpty else { return }
-
-        guard let script = MPVSubtitleFontResolver.script(forText: text),
-              script != scriptFromText else { return }
+        let script = text.flatMap(MPVSubtitleFontResolver.script(forText:))
+        guard script != scriptFromText else { return }
 
         scriptFromText = script
         applyResolvedFont()
@@ -308,7 +304,7 @@ final class MPVSubtitleFontController {
     private func applyResolvedFont() {
         let script = scriptFromText ?? scriptFromLanguage
         let family = script.flatMap { MPVSubtitleFontResolver.family(for: $0) }
-            ?? MPVSubtitleFontResolver.baselineFamily
+            ?? MPVSubtitleFontResolver.defaultFamily
 
         guard let family, family != appliedFamily else { return }
 

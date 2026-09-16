@@ -732,7 +732,7 @@ final class MPVPlayerViewController: UIViewController {
         setSetupOption("video-rotate", "no")
         setSetupOption("subs-match-os-language", "yes")
         setSetupOption("subs-fallback", "yes")
-        subtitleFonts.applySetupOptions(setSetupOption)
+        subtitleFonts.applySetupOptions()
         setSetupOption("keep-open", "yes")
         setSetupOption("target-colorspace-hint", "yes")
         setSetupOption("tone-mapping", "auto")
