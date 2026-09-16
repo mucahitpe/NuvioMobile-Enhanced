@@ -122,6 +122,9 @@ enum MPVSubtitleFontResolver {
         } ?? "sans-serif"
     }
 
+    /// Keep the bundled CJK face as Enhanced's startup/baseline subtitle font.
+    static var baselineFamily: String? { family(for: .han) }
+
     static func family(for script: Script) -> String? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
