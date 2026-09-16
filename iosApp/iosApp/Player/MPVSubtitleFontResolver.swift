@@ -108,9 +108,15 @@ enum MPVSubtitleFontResolver {
 
     // MARK: Resolution
 
-    /// mpv's built-in default. Keep Latin-script subtitles on the native CoreText
-    /// fallback path; the bundled CJK face is selected only when it is needed.
-    static let defaultFamily = "sans-serif"
+    /// Use the bundled Latin face for every script that does not need a
+    /// script-specific fallback. This keeps Turkish and other Latin subtitles
+    /// visually consistent without making the workaround Turkish-specific.
+    /// Keep mpv's default as a safe fallback if registration ever fails.
+    static var defaultFamily: String {
+        registeredFamilies.first {
+            $0.caseInsensitiveCompare("Noto Sans") == .orderedSame
+        } ?? "sans-serif"
+    }
 
     static func family(for script: Script) -> String? {
         cacheLock.lock()
