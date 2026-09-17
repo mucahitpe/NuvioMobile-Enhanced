@@ -139,16 +139,30 @@ enum MPVSubtitleFontResolver {
         guard let tag, !tag.isEmpty else { return nil }
 
         let normalized = tag.lowercased().replacingOccurrences(of: "_", with: "-")
-        switch normalized.split(separator: "-").first.map(String.init) ?? normalized {
-        case "tr", "tur", "az", "aze", "crh", "tt", "kaz", "kk", "zza", "lzz": return .latinExtended
-        case "zh", "zho", "chi", "cmn", "yue", "nan", "hak": return .han
-        case "ja", "jpn", "jp":                              return .japanese
-        case "ko", "kor":                                    return .korean
-        case "th", "tha":                                    return .thai
-        case "ar", "ara", "fa", "fas", "per", "ur", "urd", "ps", "pus", "ku": return .arabic
-        case "he", "heb", "iw", "yi", "yid":                 return .hebrew
-        case "hi", "hin", "mr", "mar", "ne", "nep", "sa", "san": return .devanagari
-        default:                                             return nil
+        let base = normalized.split(separator: "-").first.map(String.init) ?? normalized
+
+        // The subtitle provider's language tag is the preferred track-level
+        // hint. Keep all ordinary Latin languages on the bundled Latin face;
+        // this is one generic script rule, not a Turkish-only exception.
+        if [
+            "tr", "tur", "az", "aze", "crh", "tt", "kaz", "kk", "zza", "lzz",
+            "en", "eng", "de", "deu", "ger", "fr", "fra", "fre", "es", "spa",
+            "it", "ita", "pt", "por", "nl", "nld", "dut", "da", "dan", "sv", "swe",
+            "no", "nor", "nb", "nn", "fin", "fi", "isl", "is", "pl", "pol", "cs", "ces",
+            "cze", "sk", "slk", "slo", "hr", "hrv", "ro", "ron", "rum", "hu", "hun"
+        ].contains(base) {
+            return .latinExtended
+        }
+
+        switch base {
+        case "zh", "zho", "chi", "cmn", "yue", "nan", "hak", "chinese": return .han
+        case "ja", "jpn", "jp", "japanese":                         return .japanese
+        case "ko", "kor", "korean":                                   return .korean
+        case "th", "tha", "thai":                                     return .thai
+        case "ar", "ara", "fa", "fas", "per", "ur", "urd", "ps", "pus", "ku", "arabic": return .arabic
+        case "he", "heb", "iw", "yi", "yid", "hebrew":              return .hebrew
+        case "hi", "hin", "mr", "mar", "ne", "nep", "sa", "san":  return .devanagari
+        default:                                                          return nil
         }
     }
 
@@ -159,6 +173,24 @@ enum MPVSubtitleFontResolver {
             counts[script, default: 0] += 1
         }
         return counts.max { $0.value < $1.value }?.key
+    }
+
+    /// Return script evidence for one currently displayed cue. The controller
+    /// keeps only aggregate integer counts, never the old cue strings.
+    static func scriptScores(forText text: String) -> [Script: Int] {
+        var counts: [Script: Int] = [:]
+        for scalar in text.unicodeScalars {
+            guard let script = script(forScalar: scalar) else { continue }
+            counts[script, default: 0] += 1
+        }
+
+        // Japanese naturally mixes kana and Han. Treat both as one Japanese
+        // profile so a kanji-heavy cue cannot flip the family to Chinese.
+        if let japanese = counts[.japanese], let han = counts[.han] {
+            counts[.japanese] = japanese + han
+            counts[.han] = nil
+        }
+        return counts
     }
 
     private static func script(forScalar scalar: UnicodeScalar) -> Script? {
@@ -246,6 +278,16 @@ final class MPVSubtitleFontController {
     private var appliedFamily: String?
     private var scriptFromLanguage: MPVSubtitleFontResolver.Script?
     private var scriptFromText: MPVSubtitleFontResolver.Script?
+    private var provisionalScript: MPVSubtitleFontResolver.Script?
+    private var scoreTotals: [MPVSubtitleFontResolver.Script: Int] = [:]
+    private var informativeCueCount = 0
+    private var profileLocked = false
+    private var currentSubtitleTrackID: Int64?
+
+    private let minimumEvidenceCues = 3
+    private let maximumEvidenceCues = 5
+    private let confidenceThreshold = 65.0
+    private let confidenceMargin = 15.0
 
     init(player: MPVPlayerViewController) {
         self.player = player
@@ -271,10 +313,9 @@ final class MPVSubtitleFontController {
         }
 
         // Preserve Enhanced's original baseline: the bundled CJK font is
-        // selected once at startup. Latin Extended text can opt into the
-        // bundled Latin face later, while other scripts continue to use
-        // mpv/iOS fallback unless the existing script resolver selects a
-        // dedicated family.
+        // selected once at startup. A language tag can immediately select a
+        // more suitable family; an untagged track is profiled from the first
+        // few non-empty subtitle cues and then locked.
         setOption("sub-font", family)
         appliedFamily = family
         InAppLogBridge.shared.info(tag: "MPV/SubFont", message: "baseline font: \(family)")
@@ -291,7 +332,18 @@ final class MPVSubtitleFontController {
         guard let namePtr = property.name else { return }
 
         let name = String(cString: namePtr)
-        guard name == "sub-text" || name == "current-tracks/sub/lang" else { return }
+        guard name == "sub-text"
+                || name == "current-tracks/sub/lang"
+                || name == "current-tracks/sub/id" else { return }
+
+        if name == "current-tracks/sub/id" {
+            guard property.format == MPV_FORMAT_INT64, let valueData = property.data else { return }
+            let id = valueData.assumingMemoryBound(to: Int64.self).pointee
+            DispatchQueue.main.async { [weak self] in
+                self?.handleTrackID(id >= 0 ? id : nil)
+            }
+            return
+        }
 
         var value: String?
         if property.format == MPV_FORMAT_STRING, let valueData = property.data {
@@ -310,35 +362,93 @@ final class MPVSubtitleFontController {
     }
 
     private func handleLanguage(_ tag: String?) {
-        let script = MPVSubtitleFontResolver.script(forLanguageTag: tag)
-        guard script != scriptFromLanguage else { return }
-
-        scriptFromLanguage = script
-        scriptFromText = nil  // a new track invalidates the old track's text
+        scriptFromLanguage = MPVSubtitleFontResolver.script(forLanguageTag: tag)
+        resetTextProfile()
         applyResolvedFont()
     }
 
-    private func handleText(_ text: String?) {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let detectedScript = MPVSubtitleFontResolver.script(forText: text) else { return }
+    private func handleTrackID(_ id: Int64?) {
+        guard id != currentSubtitleTrackID else { return }
 
-        // A language-tagged CJK track should keep one family for the whole
-        // track. Japanese subtitles routinely mix kana, kanji and digits;
-        // letting per-cue majority detection switch between .japanese and
-        // .han causes visible font churn. Text detection remains the fallback
-        // for tracks without a reliable language tag.
-        let script: MPVSubtitleFontResolver.Script
-        if let languageScript = scriptFromLanguage,
-           languageScript == .han || languageScript == .japanese || languageScript == .korean {
-            script = languageScript
-        } else {
-            script = detectedScript
+        currentSubtitleTrackID = id
+        scriptFromLanguage = nil
+        resetTextProfile()
+        applyResolvedFont()
+    }
+
+    private func resetTextProfile() {
+        scriptFromText = nil
+        provisionalScript = nil
+        scoreTotals.removeAll(keepingCapacity: true)
+        informativeCueCount = 0
+        profileLocked = scriptFromLanguage != nil
+    }
+
+    private func handleText(_ text: String?) {
+        // A trusted language tag locks the track immediately. This prevents
+        // every cue from reclassifying a mixed-script subtitle.
+        guard !profileLocked,
+              let text,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let cueScores = MPVSubtitleFontResolver.scriptScores(forText: text)
+        guard !cueScores.isEmpty else { return }
+
+        informativeCueCount += 1
+        for (script, count) in cueScores {
+            scoreTotals[script, default: 0] += count
+        }
+        mergeJapaneseHanScores()
+
+        // Keep only numeric evidence; the old cue text is discarded after
+        // this event has been scored.
+        if provisionalScript == nil, let provisional = bestScoredScript() {
+            provisionalScript = provisional
+            scriptFromText = provisional
+            applyResolvedFont()
+            InAppLogBridge.shared.info(
+                tag: "MPV/SubFont",
+                message: "provisional font -> \(appliedFamily ?? "unknown") (script=\(provisional.rawValue))"
+            )
         }
 
-        guard script != scriptFromText else { return }
+        let ordered = scoreTotals.sorted { $0.value > $1.value }
+        let total = scoreTotals.values.reduce(0, +)
+        let topScore = total > 0 && !ordered.isEmpty ? Double(ordered[0].value) * 100.0 / Double(total) : 0.0
+        let secondScore = total > 0 && ordered.count > 1 ? Double(ordered[1].value) * 100.0 / Double(total) : 0.0
+        let confident = informativeCueCount >= minimumEvidenceCues
+            && topScore >= confidenceThreshold
+            && topScore - secondScore >= confidenceMargin
 
-        scriptFromText = script
-        applyResolvedFont()
+        if confident || informativeCueCount >= maximumEvidenceCues {
+            finalizeProfile()
+        }
+    }
+
+    private func mergeJapaneseHanScores() {
+        guard let japanese = scoreTotals[.japanese], let han = scoreTotals[.han] else { return }
+        scoreTotals[.japanese] = japanese + han
+        scoreTotals[.han] = nil
+    }
+
+    private func bestScoredScript() -> MPVSubtitleFontResolver.Script? {
+        scoreTotals.max { lhs, rhs in lhs.value < rhs.value }?.key
+    }
+
+    private func finalizeProfile() {
+        guard !profileLocked else { return }
+
+        if let chosen = bestScoredScript() {
+            scriptFromText = chosen
+            applyResolvedFont()
+            let total = scoreTotals.values.reduce(0, +)
+            let score = total > 0 ? Double(scoreTotals[chosen, default: 0]) * 100.0 / Double(total) : 0.0
+            InAppLogBridge.shared.info(
+                tag: "MPV/SubFont",
+                message: "final font lock -> \(appliedFamily ?? "unknown") (script=\(chosen.rawValue), score=\(String(format: "%.1f", score)))"
+            )
+        }
+        profileLocked = true
     }
 
     private func applyResolvedFont() {
