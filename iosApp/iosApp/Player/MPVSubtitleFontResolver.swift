@@ -52,7 +52,11 @@ enum MPVSubtitleFontResolver {
         var probeScalars: [UnicodeScalar] {
             switch self {
             case .latinExtended:
-                return ["\u{011E}", "\u{011F}", "\u{0130}", "\u{0131}", "\u{015E}", "\u{015F}"]
+                return [
+                    "\u{011E}", "\u{011F}", "\u{0130}", "\u{0131}", "\u{015E}", "\u{015F}",
+                    "\u{0416}", "\u{0436}", "\u{042F}", "\u{044F}",
+                    "\u{03A9}", "\u{03C9}", "\u{0386}", "\u{03AC}"
+                ]
             case .han:        return ["\u{4E2D}", "\u{4EEC}", "\u{8FD9}"]
             case .japanese:   return ["\u{3042}", "\u{6F22}"]
             case .korean:     return ["\u{AC00}"]
@@ -142,10 +146,11 @@ enum MPVSubtitleFontResolver {
         let base = normalized.split(separator: "-").first.map(String.init) ?? normalized
 
         // The subtitle provider's language tag is the preferred track-level
-        // hint. Keep all ordinary Latin languages on the bundled Latin face;
-        // this is one generic script rule, not a Turkish-only exception.
+        // hint. Keep ordinary Latin, Greek, and Cyrillic languages on the
+        // bundled Latin face; this is one generic script rule, not a
+        // Turkish-only exception.
         if [
-            "tr", "tur", "az", "aze", "crh", "tt", "kaz", "kk", "zza", "lzz",
+            "tr", "tur", "az", "aze", "uz", "uzb", "crh", "zza", "lzz",
             "en", "eng", "de", "deu", "ger", "fr", "fra", "fre", "es", "spa",
             "it", "ita", "pt", "por", "nl", "nld", "dut", "da", "dan", "sv", "swe",
             "no", "nor", "nb", "nn", "fin", "fi", "isl", "is", "pl", "pol", "cs", "ces",
@@ -155,6 +160,11 @@ enum MPVSubtitleFontResolver {
         }
 
         switch base {
+        case "el", "ell", "gre", "gr", "greek":                     return .latinExtended
+        case "ru", "rus", "uk", "ukr", "bg", "bul", "sr", "srp",
+             "mk", "mkd", "be", "bel", "kk", "kaz", "ky", "kir",
+             "tg", "tgk", "mn", "mon", "tt", "tat", "ba", "bak",
+             "cv", "chv", "os", "oss", "ab", "abk", "ce", "che": return .latinExtended
         case "zh", "zho", "chi", "cmn", "yue", "nan", "hak", "chinese": return .han
         case "ja", "jpn", "jp", "japanese":                         return .japanese
         case "ko", "kor", "korean":                                   return .korean
@@ -196,7 +206,9 @@ enum MPVSubtitleFontResolver {
     private static func script(forScalar scalar: UnicodeScalar) -> Script? {
         switch scalar.value {
         case 0x00C0...0x024F, 0x1E00...0x1EFF,
-             0x2C60...0x2C7F, 0xA720...0xA7FF:                    return .latinExtended
+             0x2C60...0x2C7F, 0xA720...0xA7FF,
+             0x0370...0x03FF, 0x1F00...0x1FFF,
+             0x0400...0x052F:                                      return .latinExtended
         case 0x3040...0x30FF, 0x31F0...0x31FF:                       return .japanese
         case 0x3400...0x4DBF, 0x4E00...0x9FFF,
              0xF900...0xFAFF, 0x20000...0x2FA1F:                     return .han
