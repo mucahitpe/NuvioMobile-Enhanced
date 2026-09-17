@@ -320,8 +320,22 @@ final class MPVSubtitleFontController {
 
     private func handleText(_ text: String?) {
         guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let script = MPVSubtitleFontResolver.script(forText: text),
-              script != scriptFromText else { return }
+              let detectedScript = MPVSubtitleFontResolver.script(forText: text) else { return }
+
+        // A language-tagged CJK track should keep one family for the whole
+        // track. Japanese subtitles routinely mix kana, kanji and digits;
+        // letting per-cue majority detection switch between .japanese and
+        // .han causes visible font churn. Text detection remains the fallback
+        // for tracks without a reliable language tag.
+        let script: MPVSubtitleFontResolver.Script
+        if let languageScript = scriptFromLanguage,
+           languageScript == .han || languageScript == .japanese || languageScript == .korean {
+            script = languageScript
+        } else {
+            script = detectedScript
+        }
+
+        guard script != scriptFromText else { return }
 
         scriptFromText = script
         applyResolvedFont()
