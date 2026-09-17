@@ -150,28 +150,29 @@ enum MPVSubtitleFontResolver {
         // bundled Latin face; this is one generic script rule, not a
         // Turkish-only exception.
         if [
-            "tr", "tur", "az", "aze", "uz", "uzb", "crh", "zza", "lzz",
-            "en", "eng", "de", "deu", "ger", "fr", "fra", "fre", "es", "spa",
-            "it", "ita", "pt", "por", "nl", "nld", "dut", "da", "dan", "sv", "swe",
-            "no", "nor", "nb", "nn", "fin", "fi", "isl", "is", "pl", "pol", "cs", "ces",
-            "cze", "sk", "slk", "slo", "hr", "hrv", "ro", "ron", "rum", "hu", "hun"
+            "tr", "tur", "turkish", "az", "aze", "azerbaijani", "uz", "uzb", "uzbek", "crh", "zza", "lzz",
+            "en", "eng", "english", "de", "deu", "ger", "german", "fr", "fra", "fre", "french", "es", "spa", "spanish",
+            "it", "ita", "italian", "pt", "por", "portuguese", "nl", "nld", "dut", "dutch", "da", "dan", "danish", "sv", "swe", "swedish",
+            "no", "nor", "norwegian", "nb", "nn", "fin", "fi", "finnish", "isl", "is", "icelandic", "pl", "pol", "polish", "cs", "ces",
+            "cze", "czech", "sk", "slk", "slo", "slovak", "hr", "hrv", "croatian", "ro", "ron", "rum", "romanian", "hu", "hun", "hungarian"
         ].contains(base) {
             return .latinExtended
         }
 
         switch base {
-        case "el", "ell", "gre", "gr", "greek":                     return .latinExtended
+        case "el", "ell", "gre", "gr", "greek", "greek-modern", "modern-greek": return .latinExtended
         case "ru", "rus", "uk", "ukr", "bg", "bul", "sr", "srp",
              "mk", "mkd", "be", "bel", "kk", "kaz", "ky", "kir",
              "tg", "tgk", "mn", "mon", "tt", "tat", "ba", "bak",
-             "cv", "chv", "os", "oss", "ab", "abk", "ce", "che": return .latinExtended
-        case "zh", "zho", "chi", "cmn", "yue", "nan", "hak", "chinese": return .han
-        case "ja", "jpn", "jp", "japanese":                         return .japanese
-        case "ko", "kor", "korean":                                   return .korean
-        case "th", "tha", "thai":                                     return .thai
-        case "ar", "ara", "fa", "fas", "per", "ur", "urd", "ps", "pus", "ku", "arabic": return .arabic
-        case "he", "heb", "iw", "yi", "yid", "hebrew":              return .hebrew
-        case "hi", "hin", "mr", "mar", "ne", "nep", "sa", "san":  return .devanagari
+             "cv", "chv", "os", "oss", "ab", "abk", "ce", "che",
+             "russian", "ukrainian", "bulgarian", "serbian", "macedonian", "belarusian": return .latinExtended
+        case "zh", "zho", "chi", "cmn", "yue", "nan", "hak", "chinese", "mandarin", "cantonese": return .han
+        case "ja", "jpn", "jp", "japanese":                                             return .japanese
+        case "ko", "kor", "korean":                                                       return .korean
+        case "th", "tha", "thai":                                                         return .thai
+        case "ar", "ara", "fa", "fas", "per", "ur", "urd", "ps", "pus", "ku", "arabic", "persian", "urdu": return .arabic
+        case "he", "heb", "iw", "yi", "yid", "hebrew", "yiddish":                     return .hebrew
+        case "hi", "hin", "mr", "mar", "ne", "nep", "sa", "san", "hindi", "marathi", "nepali", "sanskrit": return .devanagari
         default:                                                          return nil
         }
     }
@@ -383,7 +384,12 @@ final class MPVSubtitleFontController {
         guard id != currentSubtitleTrackID else { return }
 
         currentSubtitleTrackID = id
-        scriptFromLanguage = nil
+
+        // mpv can deliver the language property just before or just after the
+        // track-id property. Do not clear the language hint here: doing so can
+        // erase the newly selected track's route when the two notifications
+        // arrive in the opposite order. A real language change (including a
+        // nil/unknown tag) is handled by handleLanguage and resets the profile.
         resetTextProfile()
         applyResolvedFont()
     }
